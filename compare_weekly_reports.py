@@ -41,8 +41,8 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     다양한 표기 변형을 표준 컬럼명으로 통일:
       - 프로젝트명
-      - 런칭   (런칭, 런칭(예정), 오픈, 오픈일 등)
-      - 금주 진행 업무 (금주진행업무, 금주 진행업무, 금주진행 등)
+      - 런칭   (런칭, 런칭(예정), 오픈, 오픈일 등 → '런칭')
+      - 금주 진행 업무 (금주진행업무 등 → '금주 진행 업무')
     """
     rename_map = {}
     for col in df.columns:
@@ -57,7 +57,7 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_values(df: pd.DataFrame) -> pd.DataFrame:
-    """문자열 컬럼의 개행/여백을 정리"""
+    """문자열 컬럼의 개행/여백 정리"""
     for c in df.columns:
         if df[c].dtype == object:
             df[c] = df[c].map(_strip)
@@ -65,7 +65,7 @@ def normalize_values(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def make_inline_diff(a: str, b: str) -> str:
-    """업무 텍스트의 변경점을 [-삭제-][+추가+] 형태로 표시"""
+    """업무 텍스트 변경점을 [-삭제-][+추가+] 형태로 표시(화면에서 하이라이트 처리용)"""
     if pd.isna(a) and pd.isna(b):
         return ""
     a = "" if pd.isna(a) else str(a)
@@ -107,6 +107,7 @@ def _read_pdf_df(file_like) -> pd.DataFrame:
 
 
 def _read_docx_df(file_like) -> pd.DataFrame:
+    # .docx만 지원 (.doc 은 미지원)
     doc = Document(file_like)
     frames = []
     for table in doc.tables:
@@ -123,16 +124,15 @@ def _read_docx_df(file_like) -> pd.DataFrame:
 
 
 def _read_excel_df(file_like, sheet: Optional[str] = None) -> pd.DataFrame:
-    """엑셀을 항상 단일 DataFrame으로 반환 (여러 시트면 첫 시트 선택)"""
+    """엑셀을 항상 단일 DataFrame으로 반환 (여러 시트면 첫 비어있지 않은 시트 선택)"""
     if hasattr(file_like, "seek"):
         try:
-            file_like.seek(0)  # Streamlit UploadedFile은 포인터 되감기 필요
+            file_like.seek(0)  # Streamlit UploadedFile 포인터 되감기
         except Exception:
             pass
 
     df = pd.read_excel(file_like, sheet_name=(sheet if sheet is not None else 0))
-
-    if isinstance(df, dict):  # 여러 시트 반환되는 경우
+    if isinstance(df, dict):
         for v in df.values():
             if isinstance(v, pd.DataFrame) and not v.empty:
                 return v
@@ -148,7 +148,7 @@ def load_to_dataframe(file_or_path, sheet: Optional[str] = None) -> pd.DataFrame
     엑셀(.xlsx/.xls), PDF(.pdf), Word(.docx) → DataFrame 변환
       - 컬럼명/값 정규화
       - 프로젝트명 없는 행 제거
-      - 프로젝트명 중복 시 마지막 행 우선
+      - 프로젝트명 중복 시 마지막 행 유지
     """
     name = getattr(file_or_path, "name", str(file_or_path)).lower()
 
@@ -160,14 +160,14 @@ def load_to_dataframe(file_or_path, sheet: Optional[str] = None) -> pd.DataFrame
 
     if name.endswith(".pdf"):
         df = _read_pdf_df(file_or_path)
-    elif name.endswith(".docx"):   # ✅ .doc은 미지원
+    elif name.endswith(".docx"):   # .doc 미지원
         df = _read_docx_df(file_or_path)
     elif name.endswith((".xlsx", ".xls")):
         df = _read_excel_df(file_or_path, sheet=sheet)
     else:
         raise ValueError("지원하지 않는 파일 형식입니다. (.pdf, .docx, .xls, .xlsx)")
 
-    # 정규화
+    # 표준화
     df = normalize_columns(df)
     for k in ["프로젝트명", "런칭", "금주 진행 업무"]:
         if k not in df.columns:
@@ -178,7 +178,7 @@ def load_to_dataframe(file_or_path, sheet: Optional[str] = None) -> pd.DataFrame
     # 프로젝트명 없는 행 제거
     df = df[~df["프로젝트명"].str.strip().eq("")]
 
-    # 중복 프로젝트명 처리 (마지막 행만 유지)
+    # 중복 프로젝트명 처리 (마지막 행 유지)
     if len(df):
         df = df.groupby("프로젝트명", as_index=False).last()
 
