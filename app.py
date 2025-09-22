@@ -25,8 +25,8 @@ def diff_markup_to_html(s: str) -> str:
         return ""
     s = html.escape(str(s))
     s = s.replace("\n", "<br>")
-    s = re.sub(r'\[-(.*?)-\]', r'<span style="color:#c62828;text-decoration:line-through;">\1</span>', s)
-    s = re.sub(r'\[\+(.*?)\+\]', r'<span style="color:#1b5e20;font-weight:600;">\1</span>', s)
+    s = re.sub(r'\[-(.*?)-\]', r'<span style="color:#0000ff;text-decoration:line-through;">\1</span>', s)
+    s = re.sub(r'\[\+(.*?)\+\]', r'<span style="color:#ff0000;font-weight:600;">\1</span>', s)
     return s
 
 
