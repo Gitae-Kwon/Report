@@ -211,27 +211,47 @@ def build_report(prev_df: pd.DataFrame,
     return merged, modified, added, removed
 
 
-# =============== 엑셀 내보내기 (화면 느낌 최대 재현) ===============
+# =============== 엑셀 내보내기 (부분 서식 + 줄바꿈) ===============
 def _split_diff_for_rich(diff_text: str) -> List[Tuple[str, str]]:
-    """
-    '...[-삭제-][+추가+]...' → [("equal","..."),("del","삭제"),("add","추가"), ...]
-    """
+    """'...[-삭제-]동일[+추가+]...' → [("equal","..."),("del","삭제"),("equal","동일"),("add","추가"), ...]"""
     parts: List[Tuple[str, str]] = []
-    i = 0
     s = diff_text or ""
-    pattern = re.compile(r'(\[-.*?-\]|\[\+.*?\+\])', re.S)
-    for m in pattern.finditer(s):
+    i = 0
+    pat = re.compile(r'(\[-.*?-\]|\[\+.*?\+\])', re.S)
+    for m in pat.finditer(s):
         if m.start() > i:
             parts.append(("equal", s[i:m.start()]))
-        token = m.group(0)
-        if token.startswith("[-"):
-            parts.append(("del", token[2:-2]))
+        tok = m.group(0)
+        if tok.startswith("[-"):
+            parts.append(("del", tok[2:-2]))
         else:
-            parts.append(("add", token[2:-2]))
+            parts.append(("add", tok[2:-2]))
         i = m.end()
     if i < len(s):
         parts.append(("equal", s[i:]))
     return parts
+
+def _rich_from_segments_for_prev(segments, fmt_equal, fmt_del):
+    """Prev 셀: equal + del만 표시 (add는 prev에 없음)"""
+    rich = []
+    for kind, text in segments:
+        chunk = (text or "").replace("\r", "\n")
+        if kind == "equal":
+            rich += [fmt_equal, chunk]
+        elif kind == "del":
+            rich += [fmt_del, chunk]
+    return rich or [fmt_equal, ""]
+
+def _rich_from_segments_for_curr(segments, fmt_equal, fmt_add):
+    """Curr 셀: equal + add만 표시 (del은 curr에 없음)"""
+    rich = []
+    for kind, text in segments:
+        chunk = (text or "").replace("\r", "\n")
+        if kind == "equal":
+            rich += [fmt_equal, chunk]
+        elif kind == "add":
+            rich += [fmt_add, chunk]
+    return rich or [fmt_equal, ""]
 
 def write_excel(out_path: str,
                 merged: pd.DataFrame,
@@ -243,22 +263,23 @@ def write_excel(out_path: str,
                 work_col: str):
     """
     - Summary/Modified/Added/Removed 시트 생성
-    - 줄바꿈 보존 (wrap)
-    - Modified! 업무_diff는 부분 서식(삭제=빨강+취소선 / 추가=초록+볼드)로 표시
+    - 본문 줄바꿈 보존 (wrap)
+    - Prev/Curr 본문에 부분 서식으로 변경점 하이라이트
+    - 런칭 변경 시 Curr를 노란 배경
     """
-    # 1) xlsxwriter 엔진 사용 (부분서식 지원)
+    import xlsxwriter  # ensure installed
+
     with pd.ExcelWriter(out_path, engine="xlsxwriter") as wr:
-        wb  = wr.book
+        wb = wr.book
 
         # 공통 포맷
         wrap = wb.add_format({"text_wrap": True, "valign": "top"})
-        bold = wb.add_format({"bold": True})
-        # diff segment 포맷
         fmt_equal = wb.add_format({})
         fmt_del   = wb.add_format({"font_color": "#c62828", "font_strikeout": True})
         fmt_add   = wb.add_format({"font_color": "#1b5e20", "bold": True})
+        fill_yel  = wb.add_format({"bg_color": "#FFF8B4"})
 
-        # --- Summary
+        # ---------- Summary ----------
         summary_cols = [
             project_col,
             f"{launch_col}_prev", f"{launch_col}_curr",
@@ -267,34 +288,76 @@ def write_excel(out_path: str,
         ]
         keep = [c for c in summary_cols if c in merged.columns]
         merged[keep].to_excel(wr, sheet_name="Summary", index=False)
-        ws = wr.sheets["Summary"]
-        ws.set_column(0, len(keep)-1, 40, wrap)
+        ws_sum = wr.sheets["Summary"]
+        ws_sum.set_column(0, len(keep)-1, 42, wrap)
 
-        # --- Modified (일단 DataFrame으로 쓰고 diff는 부분서식으로 다시 씀)
+        # Summary prev/curr 본문에 부분서식 적용
+        if {f"{work_col}_prev", f"{work_col}_curr"}.issubset(merged.columns):
+            col_prev = keep.index(f"{work_col}_prev")
+            col_curr = keep.index(f"{work_col}_curr")
+            col_lprev = keep.index(f"{launch_col}_prev")
+            col_lcurr = keep.index(f"{launch_col}_curr") if f"{launch_col}_curr" in keep else None
+
+            for r, row in merged.iterrows():
+                diff = make_inline_diff(row.get(f"{work_col}_prev", ""), row.get(f"{work_col}_curr", ""))
+                segs = _split_diff_for_rich(diff)
+
+                # prev 본문
+                rich_prev = _rich_from_segments_for_prev(segs, fmt_equal, fmt_del)
+                ws_sum.write_rich_string(r+1, col_prev, *rich_prev, wrap)
+
+                # curr 본문
+                rich_curr = _rich_from_segments_for_curr(segs, fmt_equal, fmt_add)
+                ws_sum.write_rich_string(r+1, col_curr, *rich_curr, wrap)
+
+                # 런칭 변경 하이라이트 (curr만)
+                if col_lcurr is not None:
+                    if str(row.get(f"{launch_col}_prev","")) != str(row.get(f"{launch_col}_curr","")):
+                        ws_sum.write(r+1, col_lcurr, row.get(f"{launch_col}_curr",""), fill_yel)
+
+        # ---------- Modified ----------
         modified.to_excel(wr, sheet_name="Modified", index=False)
-        ws = wr.sheets["Modified"]
-        ws.set_column(0, len(modified.columns)-1, 45, wrap)
+        ws_mod = wr.sheets["Modified"]
+        ws_mod.set_column(0, len(modified.columns)-1, 42, wrap)
 
-        # 업무_diff 부분서식 재작성
-        if "업무_diff" in modified.columns:
-            diff_col_idx = list(modified.columns).index("업무_diff")
-            for r, diff in enumerate(modified["업무_diff"], start=2):  # 1-based + header
-                segments = _split_diff_for_rich(diff)
-                rich: List = []
-                for kind, text in segments:
-                    # 엑셀 줄바꿈은 '\n'
-                    chunk = text.replace("\r", "\n")
-                    fmt = fmt_equal if kind == "equal" else (fmt_del if kind == "del" else fmt_add)
-                    rich.extend([fmt, chunk])
-                # 최소 하나는 필요
-                if not rich:
-                    rich = [fmt_equal, ""]
-                ws.write_rich_string(r-1, diff_col_idx, *rich, wrap)
+        cols = list(modified.columns)
+        col_lp = cols.index(f"{launch_col}_prev")
+        col_lc = cols.index(f"{launch_col}_curr")
+        col_wp = cols.index(f"{work_col}_prev")
+        col_wc = cols.index(f"{work_col}_curr")
+        col_diff = cols.index("업무_diff") if "업무_diff" in cols else None
 
-        # --- Added / Removed
+        for r, row in modified.iterrows():
+            # diff 세그먼트
+            segs = _split_diff_for_rich(row.get("업무_diff", "") if col_diff is not None else
+                                        make_inline_diff(row.get(f"{work_col}_prev",""), row.get(f"{work_col}_curr","")))
+
+            # prev 본문
+            rich_prev = _rich_from_segments_for_prev(segs, fmt_equal, fmt_del)
+            ws_mod.write_rich_string(r+1, col_wp, *rich_prev, wrap)
+
+            # curr 본문
+            rich_curr = _rich_from_segments_for_curr(segs, fmt_equal, fmt_add)
+            ws_mod.write_rich_string(r+1, col_wc, *rich_curr, wrap)
+
+            # diff 컬럼(요약)도 부분서식으로 재작성
+            if col_diff is not None:
+                rich_all = []
+                for kind, text in segs:
+                    fmt = fmt_equal if kind=="equal" else (fmt_del if kind=="del" else fmt_add)
+                    rich_all += [fmt, (text or "").replace("\r","\n")]
+                if not rich_all:
+                    rich_all = [fmt_equal, ""]
+                ws_mod.write_rich_string(r+1, col_diff, *rich_all, wrap)
+
+            # 런칭 변경 하이라이트 (curr만)
+            if str(row.get(f"{launch_col}_prev","")) != str(row.get(f"{launch_col}_curr","")):
+                ws_mod.write(r+1, col_lc, row.get(f"{launch_col}_curr",""), fill_yel)
+
+        # ---------- Added / Removed ----------
         if not added.empty:
             added.to_excel(wr, sheet_name="Added", index=False)
-            wr.sheets["Added"].set_column(0, len(added.columns)-1, 45, wrap)
+            wr.sheets["Added"].set_column(0, len(added.columns)-1, 42, wrap)
         if not removed.empty:
             removed.to_excel(wr, sheet_name="Removed", index=False)
-            wr.sheets["Removed"].set_column(0, len(removed.columns)-1, 45, wrap)
+            wr.sheets["Removed"].set_column(0, len(removed.columns)-1, 42, wrap)
