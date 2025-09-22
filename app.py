@@ -3,11 +3,13 @@
 import io
 import re
 from collections import defaultdict
+import html
+import tempfile
+import os
 
 import streamlit as st
 import pandas as pd
 
-# 비교/출력 로직은 모듈 사용 (PDF/Word/Excel 모두 지원하는 최신본)
 from compare_weekly_reports import (
     load_to_dataframe,
     build_report,
@@ -19,6 +21,19 @@ st.title("📊 주간 보고서 비교 (PDF/Word/Excel 지원)")
 
 tab_compare, tab_convert = st.tabs(["✅ 주간 비교", "📄 PDF/Word → 🧾 Excel 변환"])
 
+
+# ===== 하이라이트용 util =====
+def diff_markup_to_html(s: str) -> str:
+    """[-삭제-] / [+추가+] 마크업을 HTML 강조로 변환 + 줄바꿈 표시"""
+    if s is None:
+        return ""
+    s = html.escape(str(s))
+    s = s.replace("\n", "<br>")
+    s = re.sub(r'\[-(.*?)-\]', r'<span style="background:#ffecec;color:#c62828;text-decoration:line-through;">\1</span>', s)
+    s = re.sub(r'\[\+(.*?)\+\]', r'<span style="background:#fff59d;color:#1b5e20;font-weight:600;">\1</span>', s)
+    return s
+
+
 # =========================================================
 # ① 주간 비교 탭
 # =========================================================
@@ -29,17 +44,17 @@ with tab_compare:
     with col1:
         prev_file = st.file_uploader(
             "전주 파일 업로드 (PDF/Word/Excel)",
-            type=["pdf", "doc", "docx", "xlsx", "xls"],
+            type=["pdf", "docx", "xlsx", "xls"],
             key="prev"
         )
     with col2:
         curr_file = st.file_uploader(
             "금주 파일 업로드 (PDF/Word/Excel)",
-            type=["pdf", "doc", "docx", "xlsx", "xls"],
+            type=["pdf", "docx", "xlsx", "xls"],
             key="curr"
         )
 
-    # 컬럼명은 정규화 결과 기준으로 고정 (오타/불일치 방지)
+    # 비교 컬럼(정규화 기준으로 고정)
     project_col = "프로젝트명"
     launch_col  = "런칭"
     work_col    = "금주 진행 업무"
@@ -58,17 +73,16 @@ with tab_compare:
 
         st.success("비교 완료 ✅")
 
-        # 컬럼 확인(디버깅용)
         with st.expander("전주/금주 컬럼 확인", expanded=False):
             st.write("전주 컬럼:", list(prev_df.columns))
             st.write("금주 컬럼:", list(curr_df.columns))
 
-        # 비교 실행
         merged, modified, added, removed = build_report(
             prev_df, curr_df,
             project_col=project_col, launch_col=launch_col, work_col=work_col
         )
 
+        # ---- Summary (줄바꿈 표시) ----
         st.markdown("### 요약 결과 (Summary)")
         summary_cols = [
             project_col,
@@ -76,15 +90,46 @@ with tab_compare:
             f"{work_col}_prev",  f"{work_col}_curr",
             "STATUS"
         ]
-        keep = [c for c in summary_cols if c in merged.columns]
-        st.dataframe(merged[keep], use_container_width=True)
+        summary_df = merged[[c for c in summary_cols if c in merged.columns]].copy()
+        for col in [f"{work_col}_prev", f"{work_col}_curr"]:
+            if col in summary_df.columns:
+                summary_df[col] = summary_df[col].astype(str).str.replace("\n", "<br>", regex=False)
 
+        summary_styler = (
+            summary_df.style
+            .set_properties(**{"white-space": "pre-wrap"})
+            .hide(axis="index")
+            .set_table_styles([
+                {"selector": "table", "props": "width:100%; table-layout:fixed;"},
+                {"selector": "th, td", "props": "padding:6px; vertical-align:top;"},
+            ])
+        )
+        st.markdown(summary_styler.to_html(), unsafe_allow_html=True)
+
+        # ---- Modified (줄바꿈 + diff 하이라이트) ----
         st.markdown("### 변경된 항목 (Modified)")
         if len(modified):
-            st.dataframe(modified, use_container_width=True)
+            mod_view = modified.copy()
+            for col in [f"{work_col}_prev", f"{work_col}_curr"]:
+                if col in mod_view.columns:
+                    mod_view[col] = mod_view[col].astype(str).map(lambda x: html.escape(x).replace("\n", "<br>"))
+            if "업무_diff" in mod_view.columns:
+                mod_view["업무_diff"] = mod_view["업무_diff"].map(diff_markup_to_html)
+
+            styler = (
+                mod_view.style
+                .set_properties(**{"white-space": "pre-wrap"})
+                .hide(axis="index")
+                .set_table_styles([
+                    {"selector": "table", "props": "width:100%; table-layout:fixed;"},
+                    {"selector": "th, td", "props": "padding:6px; vertical-align:top;"},
+                ])
+            )
+            st.markdown(styler.to_html(), unsafe_allow_html=True)
         else:
             st.info("변경된 항목 없음")
 
+        # ---- Added / Removed ----
         st.markdown("### 추가/삭제 항목 (Added / Removed)")
         ar = []
         if len(added):
@@ -96,16 +141,17 @@ with tab_compare:
         )
         st.dataframe(added_removed, use_container_width=True)
 
-        # 결과 엑셀 생성 & 다운로드
+        # ---- 결과 엑셀 다운로드 ----
         out_path = "weekly_diff_report.xlsx"
         write_excel(out_path, merged, modified, added, removed,
                     project_col=project_col, launch_col=launch_col, work_col=work_col)
-
         with open(out_path, "rb") as f:
-            st.download_button("📥 결과 엑셀 다운로드",
-                               f,
-                               file_name="주간비교결과.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(
+                "📥 결과 엑셀 다운로드",
+                f,
+                file_name="주간비교결과.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # =========================================================
 # ② PDF/Word → Excel 변환 탭
@@ -115,7 +161,7 @@ with tab_convert:
 
     src_file = st.file_uploader(
         "PDF/Word 파일 업로드",
-        type=["pdf", "doc", "docx"],
+        type=["pdf", "docx"],   # .doc 은 미지원 (python-docx 한계)
         key="pdfdoc2xl"
     )
 
@@ -136,8 +182,8 @@ with tab_convert:
     def _norm_key(s: str) -> str:
         return re.sub(r"\s+", "", s or "")
 
-    def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-        """(선택) 보고서 스타일에 맞춰 일부 헤더 표준화"""
+    def normalize_columns_local(df: pd.DataFrame) -> pd.DataFrame:
+        """(선택) 문서 헤더 표준화"""
         rename_map = {}
         for col in df.columns:
             key = _norm_key(col)
@@ -162,7 +208,7 @@ with tab_convert:
                     header = _make_unique_columns(header)
                     rows = [[_strip(x) for x in r] for r in tbl[1:]]
                     df = pd.DataFrame(rows, columns=header)
-                    df = normalize_columns(df)  # 필요 없으면 주석 처리
+                    df = normalize_columns_local(df)
                     df = df.dropna(how="all")
                     if len(df):
                         frames.append(df)
@@ -182,7 +228,7 @@ with tab_convert:
                 header = _make_unique_columns(rows[0])
                 data = rows[1:]
                 df = pd.DataFrame(data, columns=header)
-                df = normalize_columns(df)  # 필요 없으면 주석 처리
+                df = normalize_columns_local(df)
                 df = df.dropna(how="all")
                 if len(df):
                     frames.append(df)
@@ -195,10 +241,10 @@ with tab_convert:
             name = src_file.name.lower()
             if name.endswith(".pdf"):
                 df_conv = read_pdf_to_dataframe(src_file)
-            elif name.endswith((".doc", ".docx")):
+            elif name.endswith(".docx"):
                 df_conv = read_docx_to_dataframe(src_file)
             else:
-                st.error("PDF 또는 Word 파일만 업로드하세요.")
+                st.error("⚠️ .doc(구버전)은 지원하지 않습니다. .docx 또는 PDF로 업로드하세요.")
                 st.stop()
         except Exception as e:
             st.exception(e)
@@ -210,12 +256,14 @@ with tab_convert:
             st.success(f"표 추출 완료! (행 {len(df_conv)})")
             st.dataframe(df_conv, use_container_width=True)
 
-            # 엑셀로 다운로드
+            # 엑셀 다운로드
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 df_conv.to_excel(writer, sheet_name="Extracted", index=False)
             buf.seek(0)
-            st.download_button("📥 엑셀로 다운로드",
-                               data=buf,
-                               file_name="doc_or_pdf_extracted.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(
+                "📥 엑셀로 다운로드",
+                data=buf,
+                file_name="doc_or_pdf_extracted.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
