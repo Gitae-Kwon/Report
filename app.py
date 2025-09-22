@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import pdfplumber
-from compare_weekly_reports import build_report, write_excel
+from compare_weekly_reports import load_to_dataframe, build_report, write_excel
 
 st.title("주간 보고서 비교 도구")
 
