@@ -7,40 +7,38 @@ from collections import defaultdict
 import streamlit as st
 import pandas as pd
 
-# 비교 로직은 모듈에서 사용
+# 비교/출력 로직은 모듈 사용 (PDF/Word/Excel 모두 지원하는 최신본)
 from compare_weekly_reports import (
     load_to_dataframe,
     build_report,
     write_excel,
 )
 
-st.set_page_config(page_title="주간 보고서 비교 (PDF/Excel)", layout="wide")
-st.title("📊 주간 보고서 비교 (PDF/Excel 지원)")
+st.set_page_config(page_title="주간 보고서 비교 (PDF/Word/Excel)", layout="wide")
+st.title("📊 주간 보고서 비교 (PDF/Word/Excel 지원)")
 
-tab_compare, tab_pdf2xl = st.tabs(["✅ 주간 비교", "📄 PDF → 🧾 Excel 변환"])
+tab_compare, tab_convert = st.tabs(["✅ 주간 비교", "📄 PDF/Word → 🧾 Excel 변환"])
 
 # =========================================================
 # ① 주간 비교 탭
 # =========================================================
-# app.py (발췌)
-
-# 주간 비교 탭
 with tab_compare:
     st.subheader("주간 보고서 비교")
 
     col1, col2 = st.columns(2)
     with col1:
         prev_file = st.file_uploader(
-            "전주 파일 업로드 (PDF/Word/Excel)", 
-            type=["pdf","doc","docx","xlsx","xls"], 
+            "전주 파일 업로드 (PDF/Word/Excel)",
+            type=["pdf", "doc", "docx", "xlsx", "xls"],
             key="prev"
         )
     with col2:
         curr_file = st.file_uploader(
-            "금주 파일 업로드 (PDF/Word/Excel)", 
-            type=["pdf","doc","docx","xlsx","xls"], 
+            "금주 파일 업로드 (PDF/Word/Excel)",
+            type=["pdf", "doc", "docx", "xlsx", "xls"],
             key="curr"
         )
+
     # 컬럼명은 정규화 결과 기준으로 고정 (오타/불일치 방지)
     project_col = "프로젝트명"
     launch_col  = "런칭"
@@ -65,18 +63,23 @@ with tab_compare:
             st.write("전주 컬럼:", list(prev_df.columns))
             st.write("금주 컬럼:", list(curr_df.columns))
 
+        # 비교 실행
         merged, modified, added, removed = build_report(
             prev_df, curr_df,
             project_col=project_col, launch_col=launch_col, work_col=work_col
         )
 
         st.markdown("### 요약 결과 (Summary)")
-        st.dataframe(merged[[c for c in merged.columns if c in
-                             [project_col, f"{launch_col}_curr", f"{work_col}_curr",
-                              f"{launch_col}_prev", f"{work_col}_prev", "_merge", "STATUS"]]],
-                     use_container_width=True)
+        summary_cols = [
+            project_col,
+            f"{launch_col}_prev", f"{launch_col}_curr",
+            f"{work_col}_prev",  f"{work_col}_curr",
+            "STATUS"
+        ]
+        keep = [c for c in summary_cols if c in merged.columns]
+        st.dataframe(merged[keep], use_container_width=True)
 
-        st.markdown("### 변경된 항목 (Modified) ↪︎")
+        st.markdown("### 변경된 항목 (Modified)")
         if len(modified):
             st.dataframe(modified, use_container_width=True)
         else:
@@ -105,12 +108,16 @@ with tab_compare:
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # =========================================================
-# ② PDF → Excel 변환 탭
+# ② PDF/Word → Excel 변환 탭
 # =========================================================
-with tab_pdf2xl:
-    st.subheader("PDF의 표를 추출하여 엑셀로 저장")
+with tab_convert:
+    st.subheader("PDF/Word의 표를 추출하여 엑셀로 저장")
 
-    pdf_file = st.file_uploader("PDF 업로드", type=["pdf"], key="pdf2xl")
+    src_file = st.file_uploader(
+        "PDF/Word 파일 업로드",
+        type=["pdf", "doc", "docx"],
+        key="pdfdoc2xl"
+    )
 
     def _strip(s):
         if pd.isna(s):
@@ -161,28 +168,54 @@ with tab_pdf2xl:
                         frames.append(df)
         if not frames:
             return pd.DataFrame()
-        # 표 구조가 달라도 합치도록 outer concat
         return pd.concat(frames, ignore_index=True, sort=False)
 
-    if pdf_file is not None:
+    def read_docx_to_dataframe(file_like) -> pd.DataFrame:
+        from docx import Document
+        frames = []
+        doc = Document(file_like)
+        for table in doc.tables:
+            rows = []
+            for row in table.rows:
+                rows.append([_strip(cell.text) for cell in row.cells])
+            if len(rows) > 1:
+                header = _make_unique_columns(rows[0])
+                data = rows[1:]
+                df = pd.DataFrame(data, columns=header)
+                df = normalize_columns(df)  # 필요 없으면 주석 처리
+                df = df.dropna(how="all")
+                if len(df):
+                    frames.append(df)
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True, sort=False)
+
+    if src_file is not None:
         try:
-            df_pdf = read_pdf_to_dataframe(pdf_file)
+            name = src_file.name.lower()
+            if name.endswith(".pdf"):
+                df_conv = read_pdf_to_dataframe(src_file)
+            elif name.endswith((".doc", ".docx")):
+                df_conv = read_docx_to_dataframe(src_file)
+            else:
+                st.error("PDF 또는 Word 파일만 업로드하세요.")
+                st.stop()
         except Exception as e:
             st.exception(e)
             st.stop()
 
-        if df_pdf.empty:
-            st.warning("표를 찾지 못했습니다. PDF 레이아웃을 확인해주세요.")
+        if df_conv.empty:
+            st.warning("표를 찾지 못했습니다. 문서 레이아웃을 확인해주세요.")
         else:
-            st.success(f"표 추출 완료! (행 {len(df_pdf)})")
-            st.dataframe(df_pdf, use_container_width=True)
+            st.success(f"표 추출 완료! (행 {len(df_conv)})")
+            st.dataframe(df_conv, use_container_width=True)
 
             # 엑셀로 다운로드
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-                df_pdf.to_excel(writer, sheet_name="Extracted", index=False)
+                df_conv.to_excel(writer, sheet_name="Extracted", index=False)
             buf.seek(0)
             st.download_button("📥 엑셀로 다운로드",
                                data=buf,
-                               file_name="pdf_extracted.xlsx",
+                               file_name="doc_or_pdf_extracted.xlsx",
                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
