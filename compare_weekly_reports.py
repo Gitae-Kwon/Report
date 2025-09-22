@@ -122,8 +122,22 @@ def _read_docx_df(file_like) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def _read_excel_df(file_like) -> pd.DataFrame:
-    return pd.read_excel(file_like)
+def _read_excel_df(file_like, sheet: Optional[str] = None) -> pd.DataFrame:
+    """엑셀을 항상 단일 DataFrame으로 반환 (여러 시트면 첫 시트 선택)"""
+    if hasattr(file_like, "seek"):
+        try:
+            file_like.seek(0)  # Streamlit UploadedFile은 포인터 되감기 필요
+        except Exception:
+            pass
+
+    df = pd.read_excel(file_like, sheet_name=(sheet if sheet is not None else 0))
+
+    if isinstance(df, dict):  # 여러 시트 반환되는 경우
+        for v in df.values():
+            if isinstance(v, pd.DataFrame) and not v.empty:
+                return v
+        return list(df.values())[0]
+    return df
 
 
 # =========================
@@ -131,20 +145,27 @@ def _read_excel_df(file_like) -> pd.DataFrame:
 # =========================
 def load_to_dataframe(file_or_path, sheet: Optional[str] = None) -> pd.DataFrame:
     """
-    엑셀(.xlsx/.xls), PDF(.pdf), Word(.doc/.docx) → DataFrame 변환
+    엑셀(.xlsx/.xls), PDF(.pdf), Word(.docx) → DataFrame 변환
       - 컬럼명/값 정규화
       - 프로젝트명 없는 행 제거
       - 프로젝트명 중복 시 마지막 행 우선
     """
     name = getattr(file_or_path, "name", str(file_or_path)).lower()
+
+    if hasattr(file_or_path, "seek"):
+        try:
+            file_or_path.seek(0)
+        except Exception:
+            pass
+
     if name.endswith(".pdf"):
         df = _read_pdf_df(file_or_path)
-    elif name.endswith((".doc", ".docx")):
+    elif name.endswith(".docx"):   # ✅ .doc은 미지원
         df = _read_docx_df(file_or_path)
     elif name.endswith((".xlsx", ".xls")):
-        df = _read_excel_df(file_or_path)
+        df = _read_excel_df(file_or_path, sheet=sheet)
     else:
-        raise ValueError("지원하지 않는 파일 형식입니다. (.pdf, .doc, .docx, .xls, .xlsx)")
+        raise ValueError("지원하지 않는 파일 형식입니다. (.pdf, .docx, .xls, .xlsx)")
 
     # 정규화
     df = normalize_columns(df)
@@ -242,7 +263,7 @@ def write_excel(out_path: str,
     """
     결과 엑셀 생성:
       - Summary: 전/금주 값 + STATUS
-      - Modified: 변경 행만 (현재값 하이라이트 + 업무_diff)
+      - Modified: 변경 행만 (현재값 하이라이트 + diff)
       - Added, Removed
     """
     with pd.ExcelWriter(out_path, engine="openpyxl") as wr:
