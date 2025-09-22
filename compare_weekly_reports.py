@@ -26,6 +26,19 @@ def _strip_keep_nl(s):
     lines = [ln.strip() for ln in txt.split("\n")]
     return "\n".join(lines)
 
+def _safe_text(v) -> str:
+    """엑셀 쓰기/비교 전에 NaN/None → '' 로 치환하고 문자열로 변환"""
+    try:
+        if v is None or (isinstance(v, float) and pd.isna(v)) or pd.isna(v):
+            return ""
+    except Exception:
+        pass
+    return str(v)
+
+def _norm_for_compare(v) -> str:
+    """비교용 정규화 (공백 양끝 제거). '미정'은 그대로 값으로 사용."""
+    return _safe_text(v).strip()
+
 def _make_unique_columns(cols):
     counts = defaultdict(int)
     out = []
@@ -60,8 +73,8 @@ def normalize_values_keep_nl(df: pd.DataFrame) -> pd.DataFrame:
 
 def make_inline_diff(a: str, b: str) -> str:
     """[-삭제-][+추가+] 마크업 생성 (화면/엑셀 렌더의 소스)"""
-    a = "" if pd.isna(a) else str(a)
-    b = "" if pd.isna(b) else str(b)
+    a = _safe_text(a)
+    b = _safe_text(b)
     if a == b:
         return a
     sm = difflib.SequenceMatcher(a=a, b=b)
@@ -117,8 +130,9 @@ def _read_excel_df(file_like, sheet: Optional[str] = None) -> pd.DataFrame:
     if isinstance(df, dict):
         for v in df.values():
             if isinstance(v, pd.DataFrame) and not v.empty:
-                return v
-        return list(df.values())[0]
+                df = v; break
+        else:
+            df = list(df.values())[0]
     # 엑셀도 개행 문자 보존
     for c in df.columns:
         if df[c].dtype == object:
@@ -181,8 +195,10 @@ def build_report(prev_df: pd.DataFrame,
     def status_row(r):
         if r["_merge"] == "left_only":  return "ADDED"
         if r["_merge"] == "right_only": return "REMOVED"
-        launch_changed = (r.get(f"{launch_col}_curr") != r.get(f"{launch_col}_prev"))
-        work_changed   = (r.get(f"{work_col}_curr")   != r.get(f"{work_col}_prev"))
+        launch_changed = (_norm_for_compare(r.get(f"{launch_col}_curr")) !=
+                          _norm_for_compare(r.get(f"{launch_col}_prev")))
+        work_changed   = (_norm_for_compare(r.get(f"{work_col}_curr"))   !=
+                          _norm_for_compare(r.get(f"{work_col}_prev")))
         return "MODIFIED" if (launch_changed or work_changed) else "UNCHANGED"
 
     merged["STATUS"] = merged.apply(status_row, axis=1)
@@ -266,13 +282,14 @@ def write_excel(out_path: str,
     - 본문 줄바꿈 보존 (wrap)
     - Prev/Curr 본문에 부분 서식으로 변경점 하이라이트
     - 런칭 변경 시 Curr를 노란 배경
+    - NaN/None 안전 처리, '미정'은 값으로 정상 비교/표시
     """
     import xlsxwriter  # ensure installed
 
     with pd.ExcelWriter(out_path, engine="xlsxwriter") as wr:
         wb = wr.book
 
-        # 공통 포맷
+        # 공통 포맷 (원하는 색상: del=파랑, add=빨강)
         wrap = wb.add_format({"text_wrap": True, "valign": "top"})
         fmt_equal = wb.add_format({})
         fmt_del   = wb.add_format({"font_color": "#0000ff", "font_strikeout": True})
@@ -291,7 +308,7 @@ def write_excel(out_path: str,
         ws_sum = wr.sheets["Summary"]
         ws_sum.set_column(0, len(keep)-1, 42, wrap)
 
-        # Summary prev/curr 본문에 부분서식 적용
+        # Summary prev/curr 본문에 부분서식 적용 + 런칭 변경 하이라이트
         if {f"{work_col}_prev", f"{work_col}_curr"}.issubset(merged.columns):
             col_prev = keep.index(f"{work_col}_prev")
             col_curr = keep.index(f"{work_col}_curr")
@@ -310,10 +327,12 @@ def write_excel(out_path: str,
                 rich_curr = _rich_from_segments_for_curr(segs, fmt_equal, fmt_add)
                 ws_sum.write_rich_string(r+1, col_curr, *rich_curr, wrap)
 
-                # 런칭 변경 하이라이트 (curr만)
+                # 런칭 변경 (NaN/None 안전, '미정' 포함 비교)
                 if col_lcurr is not None:
-                    if str(row.get(f"{launch_col}_prev","")) != str(row.get(f"{launch_col}_curr","")):
-                        ws_sum.write(r+1, col_lcurr, row.get(f"{launch_col}_curr",""), fill_yel)
+                    prev_v = _norm_for_compare(row.get(f"{launch_col}_prev", ""))
+                    curr_v = _norm_for_compare(row.get(f"{launch_col}_curr", ""))
+                    if prev_v != curr_v:
+                        ws_sum.write(r+1, col_lcurr, _safe_text(row.get(f"{launch_col}_curr", "")), fill_yel)
 
         # ---------- Modified ----------
         modified.to_excel(wr, sheet_name="Modified", index=False)
@@ -350,9 +369,11 @@ def write_excel(out_path: str,
                     rich_all = [fmt_equal, ""]
                 ws_mod.write_rich_string(r+1, col_diff, *rich_all, wrap)
 
-            # 런칭 변경 하이라이트 (curr만)
-            if str(row.get(f"{launch_col}_prev","")) != str(row.get(f"{launch_col}_curr","")):
-                ws_mod.write(r+1, col_lc, row.get(f"{launch_col}_curr",""), fill_yel)
+            # 런칭 변경 (NaN/None 안전, '미정' 포함)
+            prev_v = _norm_for_compare(row.get(f"{launch_col}_prev", ""))
+            curr_v = _norm_for_compare(row.get(f"{launch_col}_curr", ""))
+            if prev_v != curr_v:
+                ws_mod.write(r+1, col_lc, _safe_text(row.get(f"{launch_col}_curr", "")), fill_yel)
 
         # ---------- Added / Removed ----------
         if not added.empty:
