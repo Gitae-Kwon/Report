@@ -25,8 +25,9 @@ def diff_markup_to_html(s: str) -> str:
         return ""
     s = html.escape(str(s))
     s = s.replace("\n", "<br>")
+    # 삭제=파랑 취소선 / 추가=빨강 굵게  (엑셀과 색상 맞춤)
     s = re.sub(r'\[-(.*?)-\]', r'<span style="color:#0000ff;text-decoration:line-through;">\1</span>', s)
-    s = re.sub(r'\[\+(.*?)\+\]', r'<span style="color:#ff0000;font-weight:600;">\1</span>', s)
+    s = re.sub(r'\[\+(.*?)\+\]', r'<span style="color:#ff0000;font-weight:700;">\1</span>', s)
     return s
 
 
@@ -89,7 +90,7 @@ with tab_compare:
         )
         st.dataframe(added_removed, use_container_width=True)
 
-        # 화면 느낌 그대로 엑셀 저장 (부분서식/줄바꿈)
+        # 엑셀 저장 (화면 느낌 최대 재현)
         out_path = "weekly_diff_report.xlsx"
         write_excel(out_path, merged, modified, added, removed,
                     project_col=project_col, launch_col=launch_col, work_col=work_col)
