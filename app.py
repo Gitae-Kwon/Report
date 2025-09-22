@@ -22,15 +22,25 @@ tab_compare, tab_pdf2xl = st.tabs(["✅ 주간 비교", "📄 PDF → 🧾 Excel
 # =========================================================
 # ① 주간 비교 탭
 # =========================================================
+# app.py (발췌)
+
+# 주간 비교 탭
 with tab_compare:
     st.subheader("주간 보고서 비교")
 
     col1, col2 = st.columns(2)
     with col1:
-        prev_file = st.file_uploader("전주 파일 업로드 (PDF/XLSX)", type=["pdf", "xlsx", "xls"], key="prev")
+        prev_file = st.file_uploader(
+            "전주 파일 업로드 (PDF/Word/Excel)", 
+            type=["pdf","doc","docx","xlsx","xls"], 
+            key="prev"
+        )
     with col2:
-        curr_file = st.file_uploader("금주 파일 업로드 (PDF/XLSX)", type=["pdf", "xlsx", "xls"], key="curr")
-
+        curr_file = st.file_uploader(
+            "금주 파일 업로드 (PDF/Word/Excel)", 
+            type=["pdf","doc","docx","xlsx","xls"], 
+            key="curr"
+        )
     # 컬럼명은 정규화 결과 기준으로 고정 (오타/불일치 방지)
     project_col = "프로젝트명"
     launch_col  = "런칭"
