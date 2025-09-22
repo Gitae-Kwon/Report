@@ -67,9 +67,9 @@ def _read_pdf_df(file_like) -> pd.DataFrame:
 
                 # 3) 필요한 컬럼만 뽑기
                 std = pd.DataFrame({
-                    "프로젝트명": df["프로젝트명"] if "프로젝트명" in df.columns else "",
-                    "런칭": df["런칭"] if "런칭" in df.columns else "",
-                    "금주 진행 업무": df["금주 진행 업무"] if "금주 진행 업무" in df.columns else "",
+                    "프로젝트명": df["프로젝트명"] if "프로젝트명" in df.columns else pd.Series(dtype=str),
+                    "런칭": df["런칭"] if "런칭" in df.columns else pd.Series(dtype=str),
+                    "금주 진행 업무": df["금주 진행 업무"] if "금주 진행 업무" in df.columns else pd.Series(dtype=str),
                 })
 
                 # 완전히 빈 행 제거
