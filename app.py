@@ -89,7 +89,7 @@ with tab_compare:
         )
         st.dataframe(added_removed, use_container_width=True)
 
-        # 화면과 비슷한 형식으로 엑셀 저장 (줄바꿈/부분서식)
+        # 화면 느낌 그대로 엑셀 저장 (부분서식/줄바꿈)
         out_path = "weekly_diff_report.xlsx"
         write_excel(out_path, merged, modified, added, removed,
                     project_col=project_col, launch_col=launch_col, work_col=work_col)
@@ -182,7 +182,7 @@ with tab_convert:
             st.success(f"표 추출 완료! (행 {len(df_conv)})")
             st.dataframe(df_conv, use_container_width=True)
 
-            # 엑셀로 저장(랩 적용)
+            # 엑셀로 저장(랩 적용, xlsxwriter 사용)
             buf = io.BytesIO()
             with pd.ExcelWriter(buf, engine="xlsxwriter") as wr:
                 df_conv.to_excel(wr, sheet_name="Extracted", index=False)
