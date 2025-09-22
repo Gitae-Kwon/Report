@@ -275,8 +275,8 @@ def write_excel(out_path: str,
         # 공통 포맷
         wrap = wb.add_format({"text_wrap": True, "valign": "top"})
         fmt_equal = wb.add_format({})
-        fmt_del   = wb.add_format({"font_color": "#c62828", "font_strikeout": True})
-        fmt_add   = wb.add_format({"font_color": "#1b5e20", "bold": True})
+        fmt_del   = wb.add_format({"font_color": "#0000ff", "font_strikeout": True})
+        fmt_add   = wb.add_format({"font_color": "#ff0000", "bold": True})
         fill_yel  = wb.add_format({"bg_color": "#FFF8B4"})
 
         # ---------- Summary ----------
