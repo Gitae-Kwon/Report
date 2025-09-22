@@ -4,8 +4,6 @@ import io
 import re
 from collections import defaultdict
 import html
-import tempfile
-import os
 
 import streamlit as st
 import pandas as pd
@@ -95,18 +93,10 @@ with tab_compare:
             if col in summary_df.columns:
                 summary_df[col] = summary_df[col].astype(str).str.replace("\n", "<br>", regex=False)
 
-        summary_styler = (
-            summary_df.style
-            .set_properties(**{"white-space": "pre-wrap"})
-            .hide(axis="index")
-            .set_table_styles([
-                {"selector": "table", "props": "width:100%; table-layout:fixed;"},
-                {"selector": "th, td", "props": "padding:6px; vertical-align:top;"},
-            ])
-        )
-        st.markdown(summary_styler.to_html(), unsafe_allow_html=True)
+        # 👉 HTML 테이블로 직접 렌더(줄바꿈 보존)
+        st.markdown(summary_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-        # ---- Modified (줄바꿈 + diff 하이라이트) ----
+        # ---- Modified (줄바꿈 + diff 하이라이트 확실히 표시) ----
         st.markdown("### 변경된 항목 (Modified)")
         if len(modified):
             mod_view = modified.copy()
@@ -116,16 +106,8 @@ with tab_compare:
             if "업무_diff" in mod_view.columns:
                 mod_view["업무_diff"] = mod_view["업무_diff"].map(diff_markup_to_html)
 
-            styler = (
-                mod_view.style
-                .set_properties(**{"white-space": "pre-wrap"})
-                .hide(axis="index")
-                .set_table_styles([
-                    {"selector": "table", "props": "width:100%; table-layout:fixed;"},
-                    {"selector": "th, td", "props": "padding:6px; vertical-align:top;"},
-                ])
-            )
-            st.markdown(styler.to_html(), unsafe_allow_html=True)
+            # 👉 하이라이트 보이도록 escape=False 로 HTML 렌더링
+            st.markdown(mod_view.to_html(escape=False, index=False), unsafe_allow_html=True)
         else:
             st.info("변경된 항목 없음")
 
@@ -161,7 +143,7 @@ with tab_convert:
 
     src_file = st.file_uploader(
         "PDF/Word 파일 업로드",
-        type=["pdf", "docx"],   # .doc 은 미지원 (python-docx 한계)
+        type=["pdf", "docx"],   # .doc은 미지원 (python-docx 한계)
         key="pdfdoc2xl"
     )
 
