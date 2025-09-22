@@ -65,7 +65,7 @@ def normalize_values(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def make_inline_diff(a: str, b: str) -> str:
-    """업무 텍스트 변경점을 [-삭제-][+추가+] 형태로 표시(화면에서 하이라이트 처리용)"""
+    """업무 텍스트 변경점을 [-삭제-][+추가+] 형태로 표시(화면 하이라이트용 마크업)"""
     if pd.isna(a) and pd.isna(b):
         return ""
     a = "" if pd.isna(a) else str(a)
@@ -107,7 +107,7 @@ def _read_pdf_df(file_like) -> pd.DataFrame:
 
 
 def _read_docx_df(file_like) -> pd.DataFrame:
-    # .docx만 지원 (.doc 은 미지원)
+    # .docx만 지원 (.doc은 미지원)
     doc = Document(file_like)
     frames = []
     for table in doc.tables:
